@@ -41,29 +41,86 @@ Or add it to `~/.pi/agent/settings.json`:
 { "packages": ["npm:pi-prompt-clock"] }
 ```
 
-## Command
+## Commands
 
-- `/prompt-clock` — print a summary (active time, tok/s, TTFT, chars/token, prompts).
-  In TUI/RPC it notifies via the UI; in print/JSON it writes to stderr.
+- `/prompt-clock` — print a metrics snapshot (active time, tok/s, TTFT, chars/token,
+  prompts). In TUI/RPC it notifies via the UI; in print/JSON it writes to stderr.
+- `/prompt-clock config` — show the effective configuration and where each value came from.
+- `/prompt-clock config set <key> <value>` — validate, clamp, and persist a value.
+- `/prompt-clock config reset <key|all>` — remove an override (or all of them).
+
+```
+/prompt-clock config
+pi-prompt-clock config  (~/.pi/agent/pi-prompt-clock.json)
+  show.task          true        default
+  show.total         true        default
+  show.tps           true        default
+  show.ttft          true        default
+  show.prompts       true        default
+  separator          " · "       default
+  windowMs           5000        default
+  charsPerToken      4           default
+  colors.footer      #7f849c (auto)
+  colors.timestamp   #9399b2 (auto)
+```
 
 ## Configuration
 
-Edit the constants at the top of `src/pi-prompt-clock.ts`:
+Settings live in `<agent-dir>/pi-prompt-clock.json` (default
+`~/.pi/agent/pi-prompt-clock.json`) and are created on the first `set`. Every key is
+optional — built-in defaults fill the gaps — so the file can be absent entirely. Edit the
+file and run `/reload`, or change values with `/prompt-clock config set`.
 
-```ts
-const WINDOW_MS = 5_000;     // sliding window for the live tok/s
-const CHARS_PER_TOKEN = 4;   // initial estimate, recalibrated from real usage
-
-const SHOW = {
-  task: true,    // ( ) current / last task elapsed time
-  total: true,   // cumulative active (interaction) time
-  tps: true,     // live tokens/sec
-  ttft: true,    // time to first token
-  prompts: true, // prompt count
-};
-
-const SEP = " · ";           // separator between footer metrics
+```json
+{
+  "show": {
+    "task": true,
+    "total": true,
+    "tps": true,
+    "ttft": true,
+    "prompts": true
+  },
+  "separator": " · ",
+  "windowMs": 5000,
+  "charsPerToken": 4,
+  "colors": { "footer": "#7f849c", "timestamp": "#9399b2" }
+}
 ```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `show.task` | boolean | `true` | `( )` current / last task elapsed time |
+| `show.total` | boolean | `true` | cumulative active (working) time |
+| `show.tps` | boolean | `true` | live tokens/sec |
+| `show.ttft` | boolean | `true` | time to first token |
+| `show.prompts` | boolean | `true` | prompt count |
+| `separator` | string | `" · "` | separator between footer metrics |
+| `windowMs` | number (250–60000) | `5000` | sliding window for the live tok/s |
+| `charsPerToken` | number (1–12) | `4` | initial estimate; recalibrated from real usage |
+| `colors.footer` | color | theme-based | footer status color |
+| `colors.timestamp` | color | theme-based | under-prompt timestamp color |
+
+Invalid values are ignored (falling back to the default) with a warning, and every key
+survives a `/reload`. Precedence is simply **config file → built-in defaults**.
+
+### Colors
+
+The status line and the under-prompt timestamp have no access to the theme object, so
+colors are ANSI codes rather than theme lookups:
+
+- **Catppuccin** theme → defaults match the built-in footer: `#7f849c` (`overlay1`) for the
+  footer and `#9399b2` (`overlay2`) for the timestamp.
+- **Any other** theme → theme-agnostic defaults: `faint` for the footer and `gray` for the
+  timestamp.
+
+Override either with `colors.footer` / `colors.timestamp`. A value is one of:
+
+- `#rrggbb` (or `#rgb`) — truecolor foreground (needs terminal truecolor support)
+- `faint`, `dim`, `gray`, `bright` — ANSI attributes/colors
+- `none` — no color
+
+Theme detection is by theme name and is re-evaluated on `/reload` (or when the config
+changes), not on a live `/theme` switch.
 
 ## How the numbers are computed
 
@@ -118,10 +175,11 @@ A single TypeScript file, loaded by Pi via jiti — no build step. Point Pi at i
 pi --extension ./src/pi-prompt-clock.ts
 ```
 
-Run the tests with Node's type stripping:
+Run the tests and typecheck:
 
 ```sh
-npm test
+npm test          # stub test suite (node --experimental-strip-types)
+npm run typecheck # tsc --noEmit
 ```
 
 ## License
