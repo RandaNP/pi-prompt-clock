@@ -23,7 +23,7 @@
   ],
   "pi": {
     "extensions": [
-      "./src/pi-prompt-clock.ts"
+      "./src/index.ts"
     ]
   },
   "peerDependencies": {

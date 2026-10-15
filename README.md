@@ -169,10 +169,13 @@ time of each prompt under the prompt.
 
 ## Development
 
-A single TypeScript file, loaded by Pi via jiti — no build step. Point Pi at it directly:
+A small TypeScript package — `src/config.ts` (settings + colors), `src/metrics.ts`
+(state + rate math), `src/render.ts` (footer + prompt timestamp), and `src/index.ts`
+(the extension entry point). Loaded by Pi via jiti with no build step; point Pi at the
+entry point directly:
 
 ```sh
-pi --extension ./src/pi-prompt-clock.ts
+pi --extension ./src/index.ts
 ```
 
 Run the tests and typecheck:

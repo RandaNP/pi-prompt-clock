@@ -1,6 +1,6 @@
 // Focused stub test for pi-prompt-clock.ts (run with: node --experimental-strip-types)
 // Verifies: factory loads, no crash, icon-less prompt timestamp, all-metrics footer, /prompt-clock.
-const EXT = new URL("../src/pi-prompt-clock.ts", import.meta.url).href;
+const EXT = new URL("../src/index.ts", import.meta.url).href;
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
