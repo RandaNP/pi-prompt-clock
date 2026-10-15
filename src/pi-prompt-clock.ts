@@ -1,31 +1,224 @@
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-	ExtensionUIContext,
-	MarkdownTransformer,
+import {
+	getAgentDir,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ExtensionUIContext,
+	type MarkdownTransformer,
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent, ThinkingContent, ToolCall } from "@earendil-works/pi-ai";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-// ─── Constants (tweak to taste) ───────────────────────────────────────────────
-const WINDOW_MS = 5_000; // sliding window for tok/s
+// ─── Constants ────────────────────────────────────────────────────────────────
+const STATUS_KEY = "prompt-clock";
+const CONFIG_FILE = "pi-prompt-clock.json";
 const TICK_ACTIVE_MS = 250; // render interval while agent is working
 const TICK_IDLE_MS = 1_000; // render interval while idle (footer still updates)
-const CHARS_PER_TOKEN = 4; // initial estimate: 1 token ≈ 4 chars (recalibrated from real usage)
+const MIN_WINDOW_MS = 250;
+const MAX_WINDOW_MS = 60_000;
 const MIN_CHARS_PER_TOKEN = 1; // calibration clamp
 const MAX_CHARS_PER_TOKEN = 12; // calibration clamp
-const STATUS_KEY = "prompt-clock";
 const DIM = "\u001b[90m"; // ANSI dim/gray for the timestamp under each prompt
-const SEP = " · "; // minimal dot separator between footer metrics
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]; // pending-TTFT spinner
 
-// ─── Footer segments (flip to false to hide a metric) ────────────────────────
-const SHOW = {
-	task: true, // ( ) current / last task elapsed time
-	total: true, // cumulative active (interaction) time
-	tps: true, // live tokens/sec (5s sliding window)
-	ttft: true, // time to first token
-	prompts: true, // prompt count
+// ─── Config ───────────────────────────────────────────────────────────────────
+interface ShowConfig {
+	task: boolean;
+	total: boolean;
+	tps: boolean;
+	ttft: boolean;
+	prompts: boolean;
+}
+interface Config {
+	show: ShowConfig;
+	separator: string;
+	windowMs: number;
+	charsPerToken: number;
+}
+
+const DEFAULT_CONFIG: Config = {
+	show: { task: true, total: true, tps: true, ttft: true, prompts: true },
+	separator: " · ",
+	windowMs: 5_000,
+	charsPerToken: 4,
 };
+
+// Effective config (defaults overlaid with the config file), plus the set of
+// keys that came from the file (for `/prompt-clock config` provenance).
+const config: Config = structuredClone(DEFAULT_CONFIG);
+const configSource = new Set<string>();
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+// Parse a number from a JSON value or command string, clamped to [min, max].
+function parseNumber(v: unknown, min: number, max: number): number | null {
+	const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+	if (!Number.isFinite(n)) return null;
+	return Math.min(max, Math.max(min, n));
+}
+function parseBool(v: string): boolean | null {
+	const s = v.trim().toLowerCase();
+	if (["true", "1", "on", "yes"].includes(s)) return true;
+	if (["false", "0", "off", "no"].includes(s)) return false;
+	return null;
+}
+
+function configPath(): string {
+	return join(getAgentDir(), CONFIG_FILE);
+}
+
+// Read <agent-dir>/pi-prompt-clock.json into `config`, collecting warnings for
+// invalid values (which fall back to defaults). Never throws.
+function loadConfigFromDisk(): string[] {
+	const next = structuredClone(DEFAULT_CONFIG);
+	const warnings: string[] = [];
+	configSource.clear();
+	const path = configPath();
+
+	if (existsSync(path)) {
+		let raw: unknown;
+		try {
+			raw = JSON.parse(readFileSync(path, "utf-8"));
+		} catch (err) {
+			warnings.push(`cannot parse ${path}: ${(err as Error).message}`);
+			raw = undefined;
+		}
+		if (isPlainObject(raw)) {
+			if (raw.show !== undefined) {
+				if (isPlainObject(raw.show)) {
+					for (const name of Object.keys(next.show) as (keyof ShowConfig)[]) {
+						const v = raw.show[name];
+						if (typeof v === "boolean") {
+							next.show[name] = v;
+							configSource.add(`show.${name}`);
+						} else if (v !== undefined) {
+							warnings.push(`show.${name} must be a boolean`);
+						}
+					}
+				} else {
+					warnings.push("show must be an object");
+				}
+			}
+			if (raw.separator !== undefined) {
+				if (typeof raw.separator === "string") {
+					next.separator = raw.separator;
+					configSource.add("separator");
+				} else {
+					warnings.push("separator must be a string");
+				}
+			}
+			if (raw.windowMs !== undefined) {
+				const n = parseNumber(raw.windowMs, MIN_WINDOW_MS, MAX_WINDOW_MS);
+				if (n !== null) {
+					next.windowMs = Math.round(n);
+					configSource.add("windowMs");
+				} else {
+					warnings.push(`windowMs must be a number ${MIN_WINDOW_MS}..${MAX_WINDOW_MS}`);
+				}
+			}
+			if (raw.charsPerToken !== undefined) {
+				const n = parseNumber(raw.charsPerToken, MIN_CHARS_PER_TOKEN, MAX_CHARS_PER_TOKEN);
+				if (n !== null) {
+					next.charsPerToken = n;
+					configSource.add("charsPerToken");
+				} else {
+					warnings.push(`charsPerToken must be a number ${MIN_CHARS_PER_TOKEN}..${MAX_CHARS_PER_TOKEN}`);
+				}
+			}
+		} else if (raw !== undefined) {
+			warnings.push("config root must be an object");
+		}
+	}
+
+	Object.assign(config, next);
+	return warnings;
+}
+
+// Raw file contents (for edits), preserving unknown keys the user may have added.
+function readRawConfig(): Record<string, unknown> {
+	const path = configPath();
+	if (!existsSync(path)) return {};
+	try {
+		const raw = JSON.parse(readFileSync(path, "utf-8"));
+		return isPlainObject(raw) ? raw : {};
+	} catch {
+		return {};
+	}
+}
+function writeRawConfig(raw: Record<string, unknown>): void {
+	const path = configPath();
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`, "utf-8");
+}
+
+// Returns an error message, or null on success.
+function setConfigValue(raw: Record<string, unknown>, key: string, value: string): string | null {
+	if (key.startsWith("show.")) {
+		const name = key.slice(5);
+		if (!(name in config.show)) return `unknown key: ${key}`;
+		const b = parseBool(value);
+		if (b === null) return `show.${name} expects true/false`;
+		const show = isPlainObject(raw.show) ? raw.show : {};
+		show[name] = b;
+		raw.show = show;
+		return null;
+	}
+	if (key === "separator") {
+		raw.separator = value;
+		return null;
+	}
+	if (key === "windowMs") {
+		const n = parseNumber(value, MIN_WINDOW_MS, MAX_WINDOW_MS);
+		if (n === null) return `windowMs expects a number ${MIN_WINDOW_MS}..${MAX_WINDOW_MS}`;
+		raw.windowMs = Math.round(n);
+		return null;
+	}
+	if (key === "charsPerToken") {
+		const n = parseNumber(value, MIN_CHARS_PER_TOKEN, MAX_CHARS_PER_TOKEN);
+		if (n === null) return `charsPerToken expects a number ${MIN_CHARS_PER_TOKEN}..${MAX_CHARS_PER_TOKEN}`;
+		raw.charsPerToken = n;
+		return null;
+	}
+	return `unknown key: ${key}`;
+}
+
+function resetConfigValue(raw: Record<string, unknown>, key: string): string | null {
+	if (key === "all") {
+		for (const k of Object.keys(raw)) delete raw[k];
+		return null;
+	}
+	if (key.startsWith("show.")) {
+		const name = key.slice(5);
+		if (!(name in config.show)) return `unknown key: ${key}`;
+		if (isPlainObject(raw.show)) {
+			delete raw.show[name];
+			if (Object.keys(raw.show).length === 0) delete raw.show;
+		}
+		return null;
+	}
+	if (key === "separator" || key === "windowMs" || key === "charsPerToken") {
+		delete raw[key];
+		return null;
+	}
+	return `unknown key: ${key}`;
+}
+
+// Rows for `/prompt-clock config`, with provenance.
+function configLines(): string[] {
+	const rows: [string, string][] = [
+		["show.task", String(config.show.task)],
+		["show.total", String(config.show.total)],
+		["show.tps", String(config.show.tps)],
+		["show.ttft", String(config.show.ttft)],
+		["show.prompts", String(config.show.prompts)],
+		["separator", JSON.stringify(config.separator)],
+		["windowMs", String(config.windowMs)],
+		["charsPerToken", String(config.charsPerToken)],
+	];
+	const width = Math.max(...rows.map(([k]) => k.length));
+	return rows.map(([k, v]) => `  ${k.padEnd(width)}  ${v.padEnd(10)}  ${configSource.has(k) ? "file" : "default"}`);
+}
 
 // ─── State ────────────────────────────────────────────────────────────────────
 interface TokenRecord {
@@ -50,7 +243,7 @@ const state = {
 	lastTtft: null as number | null,
 	// char accumulation for the live sliding window
 	tokens: [] as TokenRecord[],
-	charsPerToken: CHARS_PER_TOKEN, // recalibrated from real usage.output
+	charsPerToken: config.charsPerToken, // recalibrated from real usage.output
 	lastExactTokPerSec: null as number | null, // exact decode rate of the last message
 	calibrationSamples: 0,
 	// prompt registry for the under-prompt timestamp
@@ -140,9 +333,9 @@ function totalActiveMs(): number {
 function windowTokPerSec(): number {
 	const now = Date.now();
 	const windowChars = state.tokens
-		.filter((t) => t.t >= now - WINDOW_MS)
+		.filter((t) => t.t >= now - config.windowMs)
 		.reduce((sum, t) => sum + t.chars, 0);
-	return Math.round((windowChars / state.charsPerToken) * 1000 / WINDOW_MS);
+	return Math.round((windowChars / state.charsPerToken) * 1000 / config.windowMs);
 }
 // Learn chars/token from a finished message's real usage.output (EMA, clamped).
 function calibrate(chars: number, outputTokens: number) {
@@ -180,13 +373,14 @@ function render(ui: ExtensionUIContext | null) {
 	const taskMs = state.streaming ? currentTaskMs() : state.lastTaskMs;
 	// The two time measures sit together with just a space: "(8.2s) 1m 03s".
 	const time: string[] = [];
-	if (SHOW.task) time.push(`(${taskMs != null ? fmtDur(taskMs) : "--"})`);
-	if (SHOW.total) time.push(fmtSession(totalActiveMs()));
+	if (config.show.task) time.push(`(${taskMs != null ? fmtDur(taskMs) : "--"})`);
+	if (config.show.total) time.push(fmtSession(totalActiveMs()));
 	const parts: string[] = [];
-	if (SHOW.tps) parts.push(displayTokPerSec());
-	if (SHOW.ttft) parts.push(`TTFT ${state.lastTtft != null ? state.lastTtft + "ms" : state.streaming ? nextSpin() : "--"}`);
-	if (SHOW.prompts) parts.push(`${state.promptIndex} prompt${state.promptIndex === 1 ? "" : "s"}`);
-	const line = [time.join(" "), parts.join(SEP)].filter(Boolean).join(SEP);
+	if (config.show.tps) parts.push(displayTokPerSec());
+	if (config.show.ttft)
+		parts.push(`TTFT ${state.lastTtft != null ? state.lastTtft + "ms" : state.streaming ? nextSpin() : "--"}`);
+	if (config.show.prompts) parts.push(`${state.promptIndex} prompt${state.promptIndex === 1 ? "" : "s"}`);
+	const line = [time.join(" "), parts.join(config.separator)].filter(Boolean).join(config.separator);
 	ui.setStatus(STATUS_KEY, line);
 }
 
@@ -204,7 +398,7 @@ function seedFromSession(sessionManager: ExtensionContext["sessionManager"]) {
 	state.prompts = [];
 	state.promptIndex = 0;
 	state.lastExactTokPerSec = null;
-	state.charsPerToken = CHARS_PER_TOKEN;
+	state.charsPerToken = config.charsPerToken;
 	state.calibrationSamples = 0;
 	try {
 		const branch = sessionManager.getBranch();
@@ -287,12 +481,23 @@ export default function (pi: ExtensionAPI) {
 			process.stderr.write(msg + "\n");
 		}
 	}
+	function reloadConfig(ctx: ExtensionContext): string[] {
+		const warnings = loadConfigFromDisk();
+		state.charsPerToken = config.charsPerToken;
+		state.calibrationSamples = 0;
+		render(ui);
+		if (warnings.length > 0) notify(ctx.ui, ctx.hasUI, `pi-prompt-clock config: ${warnings.join("; ")}`);
+		return warnings;
+	}
 
 	pi.on("session_start", (_event, ctx) => {
 		ui = ctx.ui;
+		const warnings = loadConfigFromDisk();
+		state.charsPerToken = config.charsPerToken;
 		seedFromSession(ctx.sessionManager);
 		render(ui);
 		startTick();
+		if (warnings.length > 0) notify(ctx.ui, ctx.hasUI, `pi-prompt-clock config: ${warnings.join("; ")}`);
 	});
 
 	pi.on("message_start", (event, ctx) => {
@@ -400,8 +605,56 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("/prompt-clock", {
-		description: "Show pi-prompt-clock summary (active time, tok/s, TTFT, prompts)",
-		handler: async (_args, ctx) => {
+		description:
+			"Show metrics, or manage settings: /prompt-clock config [show | set <key> <value> | reset <key|all>]",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			if (parts[0] === "config") {
+				const sub = parts[1];
+				if (!sub || sub === "show") {
+					notify(ctx.ui, ctx.hasUI, `pi-prompt-clock config  (${configPath()})\n${configLines().join("\n")}`);
+					return;
+				}
+				if (sub === "set") {
+					const key = parts[2];
+					const value = parts.slice(3).join(" ");
+					if (!key || value === "") {
+						notify(ctx.ui, ctx.hasUI, "usage: /prompt-clock config set <key> <value>");
+						return;
+					}
+					const raw = readRawConfig();
+					const err = setConfigValue(raw, key, value);
+					if (err) {
+						notify(ctx.ui, ctx.hasUI, `pi-prompt-clock: ${err}`);
+						return;
+					}
+					writeRawConfig(raw);
+					const warnings = reloadConfig(ctx);
+					notify(
+						ctx.ui,
+						ctx.hasUI,
+						warnings.length > 0
+							? `pi-prompt-clock: set ${key} (warnings: ${warnings.join("; ")})`
+							: `pi-prompt-clock: set ${key} = ${value}`,
+					);
+					return;
+				}
+				if (sub === "reset") {
+					const key = parts[2] ?? "all";
+					const raw = readRawConfig();
+					const err = resetConfigValue(raw, key);
+					if (err) {
+						notify(ctx.ui, ctx.hasUI, `pi-prompt-clock: ${err}`);
+						return;
+					}
+					writeRawConfig(raw);
+					reloadConfig(ctx);
+					notify(ctx.ui, ctx.hasUI, `pi-prompt-clock: reset ${key}`);
+					return;
+				}
+				notify(ctx.ui, ctx.hasUI, "usage: /prompt-clock config [show | set <key> <value> | reset <key|all>]");
+				return;
+			}
 			notify(ctx.ui, ctx.hasUI, summaryText());
 		},
 	});

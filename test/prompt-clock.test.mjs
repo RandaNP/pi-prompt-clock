@@ -1,6 +1,9 @@
 // Focused stub test for pi-prompt-clock.ts (run with: node --experimental-strip-types)
 // Verifies: factory loads, no crash, icon-less prompt timestamp, all-metrics footer, /prompt-clock.
 const EXT = new URL("../src/pi-prompt-clock.ts", import.meta.url).href;
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function makeSessionManager() {
   const entries = [];
@@ -173,7 +176,57 @@ await t7.cmd("/prompt-clock");
 const s7 = t7.captures.notify[t7.captures.notify.length - 1];
 ok(/active:\s+5s/.test(s7), `restored active = 3000+500+1500 = 5s: ${s7.replace(/\n/g, " | ")}`);
 
+// ─── 10. config file + /prompt-clock config ─────────────────────────────
+console.log("[10] config file + /prompt-clock config");
+const agentDir = mkdtempSync(join(tmpdir(), "ppc-agent-"));
+process.env.PI_CODING_AGENT_DIR = agentDir;
+const cfgPath = join(agentDir, "pi-prompt-clock.json");
+
+// 10a. valid file is applied
+writeFileSync(cfgPath, JSON.stringify({
+  show: { task: false, total: true, tps: true, ttft: false, prompts: true },
+  separator: " | ",
+  windowMs: 2000,
+  charsPerToken: 3,
+}));
+let t8 = build({}, {});
+t8.call("session_start", { type: "session_start" });
+let f = t8.captures.status[t8.captures.status.length - 1];
+ok(!f.includes("("), `show.task=false hides (task): ${f}`);
+ok(!f.includes("TTFT"), `show.ttft=false hides TTFT: ${f}`);
+ok(f.includes(" | "), `custom separator " | " used: ${f}`);
+
+// 10b. config show reports value + source
+await t8.cmd("/prompt-clock", "config");
+const shown = t8.captures.notify[t8.captures.notify.length - 1];
+ok(/show\.task\s+false\s+file/.test(shown), `config show marks file values: ${shown.split("\n").slice(1, 3).join(" | ")}`);
+ok(/windowMs\s+2000\s+file/.test(shown), "config show reports windowMs from file");
+
+// 10c. config set writes the file and applies immediately
+await t8.cmd("/prompt-clock", "config set show.ttft true");
+f = t8.captures.status[t8.captures.status.length - 1];
+ok(f.includes("TTFT"), `set show.ttft=true re-renders TTFT: ${f}`);
+ok(JSON.parse(readFileSync(cfgPath, "utf-8")).show.ttft === true, "set persisted to file");
+
+// 10d. config reset removes an override
+await t8.cmd("/prompt-clock", "config reset show.ttft");
+ok(JSON.parse(readFileSync(cfgPath, "utf-8")).show.ttft === undefined, "reset removed show.ttft from file");
+
+// 10e. invalid set is rejected
+await t8.cmd("/prompt-clock", "config set windowMs abc");
+const err = t8.captures.notify[t8.captures.notify.length - 1];
+ok(/expects a number/.test(err), `invalid set rejected: ${err}`);
+
+// 10f. invalid file value falls back with a warning
+writeFileSync(cfgPath, JSON.stringify({ windowMs: "nope", charsPerToken: 99 }));
+let t9 = build({}, {});
+t9.call("session_start", { type: "session_start" });
+const warn = t9.captures.notify.find((m) => /config:/.test(m));
+ok(!!warn, `invalid file value warns: ${warn}`);
+delete process.env.PI_CODING_AGENT_DIR;
+rmSync(agentDir, { recursive: true, force: true });
+
 console.log(`\nRESULT: ${passCount} passed, ${failCount} failed`);
 // Stop all tick loops so the process can exit (simulates Pi session_shutdown).
-for (const inst of [t, t2, t3, t4, t5, t6, t7]) { try { inst.call("session_shutdown", { type: "session_shutdown" }); } catch {} }
+for (const inst of [t, t2, t3, t4, t5, t6, t7, t8, t9]) { try { inst.call("session_shutdown", { type: "session_shutdown" }); } catch {} }
 process.exit(failCount > 0 ? 1 : 0);
