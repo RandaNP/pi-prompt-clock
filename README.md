@@ -3,6 +3,8 @@
 Live timing metrics in the [Pi](https://github.com/earendil-works/pi) footer, plus the
 send time of every prompt rendered under the prompt itself.
 
+> **Automatic coding project** — this extension is written by an AI coding agent.
+
 Pi's built-in footer already covers token totals, cache, cost, and context usage.
 `pi-prompt-clock` adds the **timing** side:
 

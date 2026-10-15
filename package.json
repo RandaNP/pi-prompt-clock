@@ -1,7 +1,7 @@
 {
   "name": "pi-prompt-clock",
   "version": "0.1.0",
-  "description": "Timing metrics in the Pi footer, plus the send time of every prompt shown under the prompt.",
+  "description": "Timing metrics in the Pi footer, plus the send time of every prompt shown under the prompt. Automatic coding project — written by an AI coding agent.",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -34,10 +34,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CHANGE-ME/pi-prompt-clock.git"
+    "url": "git+https://github.com/RandaNP/pi-prompt-clock.git"
   },
-  "homepage": "https://github.com/CHANGE-ME/pi-prompt-clock#readme",
+  "homepage": "https://github.com/RandaNP/pi-prompt-clock#readme",
   "bugs": {
-    "url": "https://github.com/CHANGE-ME/pi-prompt-clock/issues"
+    "url": "https://github.com/RandaNP/pi-prompt-clock/issues"
   }
 }
