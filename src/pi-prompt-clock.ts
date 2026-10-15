@@ -277,8 +277,6 @@ export default function (pi: ExtensionAPI) {
 			tickTimer = null;
 		}
 	}
-	// Safety net for a hard exit that skips session_shutdown.
-	process.once("exit", stopTick);
 
 	// Notify through the UI when available; otherwise write to stderr so the
 	// command is useful in print/json modes too.
