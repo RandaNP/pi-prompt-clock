@@ -30,7 +30,9 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
-    "test": "node --experimental-strip-types test/prompt-clock.test.mjs"
+    "test": "node --experimental-strip-types test/prompt-clock.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "repository": {
     "type": "git",
@@ -39,5 +41,10 @@
   "homepage": "https://github.com/RandaNP/pi-prompt-clock#readme",
   "bugs": {
     "url": "https://github.com/RandaNP/pi-prompt-clock/issues"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.2.0",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
   }
 }

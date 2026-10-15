@@ -228,7 +228,7 @@ function summaryText(): string {
 
 // ─── Extension factory ────────────────────────────────────────────────────────
 export default function (pi: any) {
-  let tickTimer: NodeJS.Timer | null = null;
+  let tickTimer: ReturnType<typeof setInterval> | null = null;
   let ui: any = null;
 
   // Register the markdown transformer once at load time so the prompt-time
@@ -237,7 +237,7 @@ export default function (pi: any) {
 
   function startTick() {
     stopTick();
-    tickTimer = (setInterval(() => render(ui), state.streaming ? TICK_ACTIVE_MS : TICK_IDLE_MS) as NodeJS.Timer);
+    tickTimer = setInterval(() => render(ui), state.streaming ? TICK_ACTIVE_MS : TICK_IDLE_MS);
   }
   function stopTick() {
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
