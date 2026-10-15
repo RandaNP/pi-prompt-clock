@@ -1,0 +1,43 @@
+{
+  "name": "pi-prompt-clock",
+  "version": "0.1.0",
+  "description": "Timing metrics in the Pi footer, plus the send time of every prompt shown under the prompt.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "metrics",
+    "timing",
+    "ttft",
+    "tokens-per-second",
+    "footer",
+    "hud"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/pi-prompt-clock.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types test/prompt-clock.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CHANGE-ME/pi-prompt-clock.git"
+  },
+  "homepage": "https://github.com/CHANGE-ME/pi-prompt-clock#readme",
+  "bugs": {
+    "url": "https://github.com/CHANGE-ME/pi-prompt-clock/issues"
+  }
+}
