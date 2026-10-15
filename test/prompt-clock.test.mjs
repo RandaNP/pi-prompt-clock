@@ -41,6 +41,7 @@ function build(handlers = {}, opts = {}) {
     on: (t, h) => { (handlers[t] ?? (handlers[t] = [])).push(h); },
     registerMarkdownTransformer: (t) => { captures.mdTransformer = t; },
     registerCommand: (name, { handler }) => { captures.commands[name] = handler; },
+    getSettings: () => opts.settings ?? { theme: "system" },
   };
   factory(pi);
   // Event handlers receive (event, ctx) — ctx carries ui/hasUI/sessionManager.
@@ -226,7 +227,37 @@ ok(!!warn, `invalid file value warns: ${warn}`);
 delete process.env.PI_CODING_AGENT_DIR;
 rmSync(agentDir, { recursive: true, force: true });
 
+// ─── 11. colors: theme detection + config override ─────────────────────────
+console.log("[11] colors");
+// catppuccin theme → catppuccin palette
+let t10 = build({}, { settings: { theme: "catppuccin-tui-mocha" } });
+t10.call("session_start", { type: "session_start" });
+const cfCat = t10.captures.status[t10.captures.status.length - 1];
+ok(cfCat.includes("\u001b[38;2;127;132;156m"), `catppuccin footer = overlay1: ${JSON.stringify(cfCat)}`);
+const tr10 = t10.captures.mdTransformer;
+t10.call("message_start", { type: "message_start", message: { role: "user", content: "hi", timestamp: Date.now() } });
+ok(tr10("hi").includes("\u001b[38;2;147;153;178m"), `catppuccin timestamp = overlay2: ${JSON.stringify(tr10("hi"))}`);
+// non-catppuccin theme → theme-agnostic fallback
+let t11 = build({}, { settings: { theme: "system" } });
+t11.call("session_start", { type: "session_start" });
+const cfFallback = t11.captures.status[t11.captures.status.length - 1];
+ok(cfFallback.startsWith("\u001b[2m"), `fallback footer = faint: ${JSON.stringify(cfFallback)}`);
+ok(!cfFallback.includes("38;2;"), "fallback footer not truecolor");
+// config override wins over theme detection
+const colorDir = mkdtempSync(join(tmpdir(), "ppc-color-"));
+process.env.PI_CODING_AGENT_DIR = colorDir;
+writeFileSync(join(colorDir, "pi-prompt-clock.json"), JSON.stringify({ colors: { footer: "#ff0000", timestamp: "bright" } }));
+let t12 = build({}, { settings: { theme: "catppuccin-tui-mocha" } });
+t12.call("session_start", { type: "session_start" });
+const cfOverride = t12.captures.status[t12.captures.status.length - 1];
+ok(cfOverride.includes("\u001b[38;2;255;0;0m"), `config override footer = #ff0000: ${JSON.stringify(cfOverride)}`);
+const tr12 = t12.captures.mdTransformer;
+t12.call("message_start", { type: "message_start", message: { role: "user", content: "yo", timestamp: Date.now() } });
+ok(tr12("yo").includes("\u001b[97m"), `config override timestamp = bright: ${JSON.stringify(tr12("yo"))}`);
+delete process.env.PI_CODING_AGENT_DIR;
+rmSync(colorDir, { recursive: true, force: true });
+
 console.log(`\nRESULT: ${passCount} passed, ${failCount} failed`);
 // Stop all tick loops so the process can exit (simulates Pi session_shutdown).
-for (const inst of [t, t2, t3, t4, t5, t6, t7, t8, t9]) { try { inst.call("session_shutdown", { type: "session_shutdown" }); } catch {} }
+for (const inst of [t, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12]) { try { inst.call("session_shutdown", { type: "session_shutdown" }); } catch {} }
 process.exit(failCount > 0 ? 1 : 0);

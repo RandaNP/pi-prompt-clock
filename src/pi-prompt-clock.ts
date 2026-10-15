@@ -18,7 +18,6 @@ const MIN_WINDOW_MS = 250;
 const MAX_WINDOW_MS = 60_000;
 const MIN_CHARS_PER_TOKEN = 1; // calibration clamp
 const MAX_CHARS_PER_TOKEN = 12; // calibration clamp
-const DIM = "\u001b[90m"; // ANSI dim/gray for the timestamp under each prompt
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]; // pending-TTFT spinner
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -29,11 +28,16 @@ interface ShowConfig {
 	ttft: boolean;
 	prompts: boolean;
 }
+interface ColorsConfig {
+	footer?: string;
+	timestamp?: string;
+}
 interface Config {
 	show: ShowConfig;
 	separator: string;
 	windowMs: number;
 	charsPerToken: number;
+	colors: ColorsConfig;
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -41,7 +45,65 @@ const DEFAULT_CONFIG: Config = {
 	separator: " · ",
 	windowMs: 5_000,
 	charsPerToken: 4,
+	colors: {},
 };
+
+// Color resolution. `setStatus` and the markdown transformer have no theme
+// object, so colors are hardcoded ANSI. A `#rrggbb` value becomes truecolor;
+// named tokens cover theme-agnostic fallbacks.
+interface ColorPair {
+	open: string;
+	close: string;
+}
+const NO_COLOR: ColorPair = { open: "", close: "" };
+const COLOR_TOKENS: Record<string, ColorPair> = {
+	none: NO_COLOR,
+	off: NO_COLOR,
+	default: NO_COLOR,
+	faint: { open: "\u001b[2m", close: "\u001b[22m" },
+	dim: { open: "\u001b[90m", close: "\u001b[39m" },
+	gray: { open: "\u001b[37m", close: "\u001b[39m" },
+	grey: { open: "\u001b[37m", close: "\u001b[39m" },
+	bright: { open: "\u001b[97m", close: "\u001b[39m" },
+};
+function colorPair(spec: string): ColorPair {
+	const s = spec.trim().toLowerCase();
+	if (s in COLOR_TOKENS) return COLOR_TOKENS[s];
+	const m = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/);
+	if (m) {
+		let h = m[1];
+		if (h.length === 3)
+			h = h
+				.split("")
+				.map((c) => c + c)
+				.join("");
+		const r = parseInt(h.slice(0, 2), 16);
+		const g = parseInt(h.slice(2, 4), 16);
+		const b = parseInt(h.slice(4, 6), 16);
+		return { open: `\u001b[38;2;${r};${g};${b}m`, close: "\u001b[39m" };
+	}
+	return NO_COLOR;
+}
+function isValidColor(spec: unknown): spec is string {
+	if (typeof spec !== "string") return false;
+	const s = spec.trim().toLowerCase();
+	return s in COLOR_TOKENS || /^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(s);
+}
+// Catppuccin Mocha `dim` (overlay1) and `overlay2`, chosen by theme name;
+// theme-agnostic `faint`/`gray` otherwise.
+const CATPPUCCIN_COLORS = { footer: "#7f849c", timestamp: "#9399b2" };
+const FALLBACK_COLORS = { footer: "faint", timestamp: "gray" };
+let footerColor: ColorPair = colorPair(FALLBACK_COLORS.footer);
+let timestampColor: ColorPair = colorPair(FALLBACK_COLORS.timestamp);
+let resolvedColors = { ...FALLBACK_COLORS };
+function resolveColors(isCatppuccin: boolean): void {
+	const base = isCatppuccin ? CATPPUCCIN_COLORS : FALLBACK_COLORS;
+	const footer = config.colors.footer ?? base.footer;
+	const timestamp = config.colors.timestamp ?? base.timestamp;
+	footerColor = colorPair(footer);
+	timestampColor = colorPair(timestamp);
+	resolvedColors = { footer, timestamp };
+}
 
 // Effective config (defaults overlaid with the config file), plus the set of
 // keys that came from the file (for `/prompt-clock config` provenance).
@@ -126,6 +188,22 @@ function loadConfigFromDisk(): string[] {
 					warnings.push(`charsPerToken must be a number ${MIN_CHARS_PER_TOKEN}..${MAX_CHARS_PER_TOKEN}`);
 				}
 			}
+			if (raw.colors !== undefined) {
+				if (isPlainObject(raw.colors)) {
+					for (const name of ["footer", "timestamp"] as const) {
+						const v = raw.colors[name];
+						if (v === undefined) continue;
+						if (isValidColor(v)) {
+							next.colors[name] = v;
+							configSource.add(`colors.${name}`);
+						} else {
+							warnings.push(`colors.${name} must be #rrggbb or a known token`);
+						}
+					}
+				} else {
+					warnings.push("colors must be an object");
+				}
+			}
 		} else if (raw !== undefined) {
 			warnings.push("config root must be an object");
 		}
@@ -180,6 +258,14 @@ function setConfigValue(raw: Record<string, unknown>, key: string, value: string
 		raw.charsPerToken = n;
 		return null;
 	}
+	if (key === "colors.footer" || key === "colors.timestamp") {
+		if (!isValidColor(value)) return `${key} must be #rrggbb or faint/dim/gray/bright/none`;
+		const name = key.slice("colors.".length);
+		const colors = isPlainObject(raw.colors) ? raw.colors : {};
+		colors[name] = value;
+		raw.colors = colors;
+		return null;
+	}
 	return `unknown key: ${key}`;
 }
 
@@ -201,6 +287,14 @@ function resetConfigValue(raw: Record<string, unknown>, key: string): string | n
 		delete raw[key];
 		return null;
 	}
+	if (key === "colors.footer" || key === "colors.timestamp") {
+		const name = key.slice("colors.".length);
+		if (isPlainObject(raw.colors)) {
+			delete raw.colors[name];
+			if (Object.keys(raw.colors).length === 0) delete raw.colors;
+		}
+		return null;
+	}
 	return `unknown key: ${key}`;
 }
 
@@ -215,6 +309,11 @@ function configLines(): string[] {
 		["separator", JSON.stringify(config.separator)],
 		["windowMs", String(config.windowMs)],
 		["charsPerToken", String(config.charsPerToken)],
+		["colors.footer", configSource.has("colors.footer") ? resolvedColors.footer : `${resolvedColors.footer} (auto)`],
+		[
+			"colors.timestamp",
+			configSource.has("colors.timestamp") ? resolvedColors.timestamp : `${resolvedColors.timestamp} (auto)`,
+		],
 	];
 	const width = Math.max(...rows.map(([k]) => k.length));
 	return rows.map(([k, v]) => `  ${k.padEnd(width)}  ${v.padEnd(10)}  ${configSource.has(k) ? "file" : "default"}`);
@@ -361,7 +460,7 @@ const promptTransformer: MarkdownTransformer = (markdown) => {
 		// First match wins (rare duplicate-prompt case: earliest time shown).
 		const match = state.prompts.find((p) => p.text === markdown);
 		if (!match) return markdown; // graceful: no match → no timestamp
-		return `${markdown}\n\n${DIM}${hms(match.sentAt)}`;
+		return `${markdown}\n\n${timestampColor.open}${hms(match.sentAt)}${timestampColor.close}`;
 	} catch {
 		return markdown;
 	}
@@ -381,7 +480,7 @@ function render(ui: ExtensionUIContext | null) {
 		parts.push(`TTFT ${state.lastTtft != null ? state.lastTtft + "ms" : state.streaming ? nextSpin() : "--"}`);
 	if (config.show.prompts) parts.push(`${state.promptIndex} prompt${state.promptIndex === 1 ? "" : "s"}`);
 	const line = [time.join(" "), parts.join(config.separator)].filter(Boolean).join(config.separator);
-	ui.setStatus(STATUS_KEY, line);
+	ui.setStatus(STATUS_KEY, `${footerColor.open}${line}${footerColor.close}`);
 }
 
 // ─── Session seeding ──────────────────────────────────────────────────────────
@@ -481,8 +580,17 @@ export default function (pi: ExtensionAPI) {
 			process.stderr.write(msg + "\n");
 		}
 	}
+	function themeIsCatppuccin(): boolean {
+		try {
+			const theme = pi.getSettings().theme;
+			return typeof theme === "string" && theme.toLowerCase().includes("catppuccin");
+		} catch {
+			return false;
+		}
+	}
 	function reloadConfig(ctx: ExtensionContext): string[] {
 		const warnings = loadConfigFromDisk();
+		resolveColors(themeIsCatppuccin());
 		state.charsPerToken = config.charsPerToken;
 		state.calibrationSamples = 0;
 		render(ui);
@@ -493,6 +601,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		ui = ctx.ui;
 		const warnings = loadConfigFromDisk();
+		resolveColors(themeIsCatppuccin());
 		state.charsPerToken = config.charsPerToken;
 		seedFromSession(ctx.sessionManager);
 		render(ui);
