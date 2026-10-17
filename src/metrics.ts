@@ -49,8 +49,8 @@ export function hms(ts: number): string {
 }
 export function fmtDur(ms: number): string {
 	const m = Math.floor(ms / 60_000);
-	const s = (ms % 60_000) / 1000;
-	return m > 0 ? `${m}m ${(s | 0)}s` : `${s.toFixed(1)}s`;
+	const s = Math.floor((ms % 60_000) / 1000);
+	return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 export function fmtSession(ms: number): string {
 	const h = Math.floor(ms / 3_600_000);

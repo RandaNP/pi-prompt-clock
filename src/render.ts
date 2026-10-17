@@ -14,6 +14,14 @@ import {
 
 const STATUS_KEY = "prompt-clock";
 
+// Last footer text we pushed, so identical ticks don't force a repaint.
+let lastStatus: string | undefined;
+
+/** Forget the last footer text so the next render() emits even if unchanged. */
+export function resetStatusCache(): void {
+	lastStatus = undefined;
+}
+
 // ─── Prompt-time transformer (rendered under each prompt) ────────────────────
 export const promptTransformer: MarkdownTransformer = (markdown) => {
 	try {
@@ -32,7 +40,7 @@ export const promptTransformer: MarkdownTransformer = (markdown) => {
 export function render(ui: ExtensionUIContext | null) {
 	if (!ui) return;
 	const taskMs = state.streaming ? currentTaskMs() : state.lastTaskMs;
-	// The two time measures sit together with just a space: "(8.2s) 1m 03s".
+	// The two time measures sit together with just a space: "(8s) 1m 3s".
 	const time: string[] = [];
 	if (config.show.task) time.push(`(${taskMs != null ? fmtDur(taskMs) : "--"})`);
 	if (config.show.total) time.push(fmtSession(totalActiveMs()));
@@ -43,7 +51,10 @@ export function render(ui: ExtensionUIContext | null) {
 	if (config.show.prompts) parts.push(`${state.promptIndex} prompt${state.promptIndex === 1 ? "" : "s"}`);
 	const line = [time.join(" "), parts.join(config.separator)].filter(Boolean).join(config.separator);
 	const color = getFooterColorPair();
-	ui.setStatus(STATUS_KEY, `${color.open}${line}${color.close}`);
+	const text = `${color.open}${line}${color.close}`;
+	if (text === lastStatus) return;
+	lastStatus = text;
+	ui.setStatus(STATUS_KEY, text);
 }
 
 // ─── Metrics summary ──────────────────────────────────────────────────────────

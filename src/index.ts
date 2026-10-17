@@ -21,10 +21,9 @@ import {
 	state,
 	totalActiveMs,
 } from "./metrics.ts";
-import { promptTransformer, render, summaryText } from "./render.ts";
+import { promptTransformer, render, resetStatusCache, summaryText } from "./render.ts";
 
-const TICK_ACTIVE_MS = 250; // render interval while agent is working
-const TICK_IDLE_MS = 1_000; // render interval while idle (footer still updates)
+const TICK_MS = 1_000; // periodic footer refresh (elapsed time / TTFT spinner while streaming)
 
 // ─── Extension factory ────────────────────────────────────────────────────────
 export default function (pi: ExtensionAPI) {
@@ -44,7 +43,7 @@ export default function (pi: ExtensionAPI) {
 			} catch {
 				/* ignore */
 			}
-		}, state.streaming ? TICK_ACTIVE_MS : TICK_IDLE_MS);
+		}, TICK_MS);
 		// Do not let the tick timer keep the process alive on its own.
 		const handle = tickTimer as unknown as { unref?: () => void };
 		handle.unref?.();
@@ -89,6 +88,7 @@ export default function (pi: ExtensionAPI) {
 		resolveColors(themeIsCatppuccin());
 		state.charsPerToken = config.charsPerToken;
 		seedFromSession(ctx.sessionManager);
+		resetStatusCache();
 		render(ui);
 		startTick();
 		if (warnings.length > 0) notify(ctx.ui, ctx.hasUI, `pi-prompt-clock config: ${warnings.join("; ")}`);
