@@ -1,6 +1,6 @@
 {
   "name": "pi-prompt-clock",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Timing metrics in the Pi footer, plus the send time of every prompt shown under the prompt. Automatic coding project — written by an AI coding agent.",
   "type": "module",
   "license": "MIT",
